@@ -30,7 +30,7 @@ parser.add_argument('--pretrained_diffusion_path',
 parser.add_argument('--diffusion_steps', default=20, type=int, help='Total DDIM sampling steps')
 parser.add_argument('--start_step', default=15, type=int, help='Which DDIM step to start the attack')
 parser.add_argument('--iterations', default=30, type=int, help='Iterations of optimizing the adv_image')
-parser.add_argument('--res', default=1024, type=int, help='Input image resized resolution')
+parser.add_argument('--res', default=224, type=int, help='Input image resized resolution')
 parser.add_argument('--model_name', default="inception", type=str,
                     help='The surrogate model from which the adversarial examples are crafted')
 parser.add_argument('--dataset_name', default="imagenet_compatible", type=str,
@@ -63,7 +63,7 @@ seed_torch(42)
 
 
 def run_diffusion_attack(image, label, diffusion_model, diffusion_steps, guidance=2.5,
-                         self_replace_steps=1., save_dir="output", res=1024,
+                         self_replace_steps=1., save_dir=r"C:\Users\PC\Desktop\output", res=224,
                          model_name="inception", start_step=15, iterations=30, args=None):
     controller = AttentionControlEdit(diffusion_steps, self_replace_steps, args.res)
 
@@ -115,20 +115,98 @@ if __name__ == "__main__":
 
     print(f"\n******Attack based on Diffusion, Attacked Dataset: {args.dataset_name}*********")
 
-    # Change the path to "stabilityai/stable-diffusion-2-base" if you want to use the pretrained model.
+    # Change the path to "stabilityai/stable-diffusion-xl-base-1.0" if you want to use the pretrained model.
     pretrained_diffusion_path = args.pretrained_diffusion_path
 
-    #pre-diffusionModel
-    # ldm_stable = StableDiffusionPipeline.from_pretrained(pretrained_diffusion_path).to('cuda:0')
-    # ldm_stable.scheduler = DDIMScheduler.from_config(ldm_stable.scheduler.config)
+    # Use torch.float16 instead of bfloat16 if the GPU doesn't support bfloat16
+    try:
+        ldm_stable = StableDiffusionXLPipeline.from_pretrained(
+            pretrained_diffusion_path,
+            torch_dtype=torch.float16,
+            variant="fp16",
+            use_safetensors=True
+        )
+    except Exception as e:
+        print(f"Error loading model with float16, trying with float32: {e}")
+        ldm_stable = StableDiffusionXLPipeline.from_pretrained(
+            pretrained_diffusion_path,
+            torch_dtype=torch.float32,
+            use_safetensors=True
+        )
+    
+    ldm_stable.scheduler = DDIMScheduler.from_config(ldm_stable.scheduler.config)
+    
+    # Move to GPU and set to eval mode
+    ldm_stable = ldm_stable.to("cuda")
+    ldm_stable.vae.eval()
+    ldm_stable.unet.eval()
+    ldm_stable.text_encoder.eval()
+    ldm_stable.text_encoder_2.eval()
 
-    ldm_stable = StableDiffusionXLPipeline.from_pretrained(
-        pretrained_diffusion_path,
-        variant="fp16",
-        torch_dtype=torch.float16
-    ).to("cuda")
-    ldm_stable.scheduler = DDIMScheduler.from_pretrained(pretrained_diffusion_path, subfolder="scheduler")
-
+    # 检查类型，确保是SDXL的组件
+    print("text_encoder:", type(ldm_stable.text_encoder))
+    print("tokenizer:", type(ldm_stable.tokenizer))
+    print("text_encoder_2:", type(ldm_stable.text_encoder_2))
+    print("tokenizer_2:", type(ldm_stable.tokenizer_2))
+    
+    # 添加encode_prompt方法到pipeline
+    def encode_prompt(self, prompt):
+        """为SDXL编码提示词，返回用于UNet的完整嵌入张量字典"""
+        # 文本编码
+        text_inputs = self.tokenizer(
+            prompt,
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).to(self.device)
+        
+        text_embeddings = self.text_encoder(text_inputs.input_ids)[0]
+        
+        # SDXL第二个文本编码器
+        add_text_inputs = self.tokenizer_2(
+            prompt,
+            padding="max_length",
+            max_length=self.tokenizer_2.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).to(self.device)
+        
+        add_text_embeddings = self.text_encoder_2(add_text_inputs.input_ids)[0]
+        
+        # 生成无条件嵌入用于CFG
+        uncond_input = self.tokenizer(
+            [""] * len(prompt),
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).to(self.device)
+        
+        uncond_embeddings = self.text_encoder(uncond_input.input_ids)[0]
+        
+        uncond_add_input = self.tokenizer_2(
+            [""] * len(prompt),
+            padding="max_length",
+            max_length=self.tokenizer_2.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).to(self.device)
+        
+        uncond_add_embeddings = self.text_encoder_2(uncond_add_input.input_ids)[0]
+        
+        # 整合为最终用于UNet的embeddings
+        prompt_embeds = torch.cat([uncond_embeddings, text_embeddings])
+        pooled_prompt_embeds = torch.cat([uncond_add_embeddings, add_text_embeddings])
+        
+        # 返回所有所需嵌入，包括pooled_prompt_embeds作为text_embeds
+        return {
+            "prompt_embeds": prompt_embeds,
+            "pooled_prompt_embeds": pooled_prompt_embeds
+        }
+    
+    # 添加到pipeline实例
+    ldm_stable.encode_prompt = encode_prompt.__get__(ldm_stable)
 
     "Attack a subset images"
     all_images = glob.glob(os.path.join(images_root, "*"))

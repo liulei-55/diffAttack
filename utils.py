@@ -10,10 +10,23 @@ def aggregate_attention(prompts, attention_store, res: int, from_where, is_cross
     attention_maps = attention_store.get_average_attention()
     num_pixels = res ** 2
     for location in from_where:
-        for item in attention_maps[f"{location}_{'cross' if is_cross else 'self'}"]:
-            if item.shape[1] == num_pixels:
-                cross_maps = item.reshape(len(prompts), -1, res, res, item.shape[-1])[select]
-                out.append(cross_maps)
+        key = f"{location}_{'cross' if is_cross else 'self'}"
+        if key in attention_maps and len(attention_maps[key]) > 0:
+            for item in attention_maps[key]:
+                if item.shape[1] == num_pixels:
+                    item = item.float()
+                    cross_maps = item.reshape(len(prompts), -1, res, res, item.shape[-1])[select]
+                    out.append(cross_maps)
+    
+    if not out:
+        # Handle case where no attention maps match the criteria
+        if is_cross:
+            # Default shape for cross-attention with 1 token
+            return torch.zeros((res, res, 1), device='cpu' if is_cpu else 'cuda')
+        else:
+            # Default shape for self-attention
+            return torch.zeros((res, res), device='cpu' if is_cpu else 'cuda')
+    
     out = torch.cat(out, dim=0)
     out = out.sum(0) / out.shape[0]
     return out.cpu() if is_cpu else out

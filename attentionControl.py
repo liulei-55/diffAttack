@@ -76,8 +76,8 @@ class AttentionControlEdit(AttentionStore, abc.ABC):
                  self_replace_steps: Union[float, Tuple[float, float]], res):
         super(AttentionControlEdit, self).__init__(res)
         self.batch_size = 2
-        if isinstance(self_replace_steps, float):
-            self_replace_steps = (0, self_replace_steps)
+        if type(self_replace_steps) is float:
+            self_replace_steps = 0, self_replace_steps
         self.num_self_replace = int(num_steps * self_replace_steps[0]), int(num_steps * self_replace_steps[1])
         self.loss = 0
         self.criterion = torch.nn.MSELoss()

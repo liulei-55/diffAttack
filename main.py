@@ -142,12 +142,6 @@ if __name__ == "__main__":
     ldm_stable.unet.eval()
     ldm_stable.text_encoder.eval()
     ldm_stable.text_encoder_2.eval()
-
-    # 检查类型，确保是SDXL的组件
-    print("text_encoder:", type(ldm_stable.text_encoder))
-    print("tokenizer:", type(ldm_stable.tokenizer))
-    print("text_encoder_2:", type(ldm_stable.text_encoder_2))
-    print("tokenizer_2:", type(ldm_stable.tokenizer_2))
     
     # 添加encode_prompt方法到pipeline
     def encode_prompt(self, prompt):

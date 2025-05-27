@@ -14,6 +14,7 @@ def aggregate_attention(prompts, attention_store, res: int, from_where, is_cross
         if key in attention_maps and len(attention_maps[key]) > 0:
             for item in attention_maps[key]:
                 if item.shape[1] == num_pixels:
+                    # Convert to float32 for consistent processing
                     item = item.float()
                     cross_maps = item.reshape(len(prompts), -1, res, res, item.shape[-1])[select]
                     out.append(cross_maps)
